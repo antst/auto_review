@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 
 mod bench;
+mod chatgpt;
 mod cli;
 mod commands;
 
@@ -29,6 +30,7 @@ async fn main() -> Result<()> {
         Command::Gateway(_) => unreachable!("gateway command returned before CLI tracing init"),
         Command::Agentcore(AgentcoreCommand::Serve(args)) => commands::agentcore_serve(args).await,
         Command::Auth(AuthCommand::Init(args)) => commands::init(args).await,
+        Command::Auth(AuthCommand::ChatGpt(args)) => chatgpt::run(args).await,
         Command::Webhook(WebhookCommand::Register(args)) => commands::register_webhook(args).await,
         Command::Webhook(WebhookCommand::List(args)) => commands::list_webhooks(args).await,
         Command::Webhook(WebhookCommand::Unregister(args)) => {

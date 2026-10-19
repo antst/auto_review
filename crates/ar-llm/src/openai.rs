@@ -169,7 +169,7 @@ impl LlmProvider for OpenAiProvider {
 /// holds that much in memory and pollutes operator logs. 1 KiB is
 /// enough to surface the actual error message at the top of the
 /// body without dragging the whole HTML stub along.
-fn cap_for_error(s: &str) -> String {
+pub(crate) fn cap_for_error(s: &str) -> String {
     const CAP: usize = 1024;
     if s.len() <= CAP {
         return s.to_string();

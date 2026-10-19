@@ -1,5 +1,27 @@
 use clap::{Parser, Subcommand};
 
+#[cfg(test)]
+mod chatgpt_cli_tests {
+    use super::*;
+    #[test]
+    fn chatgpt_auth_commands_are_operator_accessible() {
+        for action in ["login", "status", "logout", "resume", "models"] {
+            assert!(
+                Cli::try_parse_from([
+                    "auto-review",
+                    "auth",
+                    "chatgpt",
+                    action,
+                    "--profile",
+                    "work"
+                ])
+                .is_ok(),
+                "{action}"
+            );
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "auto-review",
@@ -140,12 +162,51 @@ pub struct AgentcoreServeArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum AuthCommand {
+    /// Sign in with ChatGPT and manage subscription-backed LLM access.
+    #[command(name = "chatgpt", subcommand)]
+    ChatGpt(ChatGptCommand),
     /// Mint a personal access token for the auto_review bot user.
     ///
     /// Uses the bot user's own password (HTTP Basic) to create a PAT with
     /// the scopes the reviewer needs. The PAT is printed once; save it
     /// into AR_FORGEJO_TOKEN.
     Init(InitArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ChatGptCommand {
+    /// Continue with ChatGPT using a loopback OAuth callback.
+    Login(ChatGptLoginArgs),
+    /// Show account, local token totals and quota pause; never prints tokens.
+    Status(ChatGptArgs),
+    /// Revoke the renewable session and clear local tokens.
+    Logout(ChatGptArgs),
+    /// Clear the local quota pause after resolving the limit in ChatGPT settings.
+    Resume(ChatGptArgs),
+    /// Fetch the selected account's available model catalog.
+    Models(ChatGptArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ChatGptArgs {
+    /// Credential JSON file in a private directory (default: ~/.config/auto_review/chatgpt/credentials.json).
+    #[arg(long, env = "LLM_CHATGPT_CREDENTIALS")]
+    pub credentials: Option<std::path::PathBuf>,
+    /// Separate account/workspace registration label.
+    #[arg(long, env = "LLM_CHATGPT_PROFILE", default_value = "default")]
+    pub profile: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ChatGptLoginArgs {
+    #[command(flatten)]
+    pub connection: ChatGptArgs,
+    /// Local callback port; use SSH forwarding when signing in on a remote host.
+    #[arg(long, default_value_t = 1455)]
+    pub port: u16,
+    /// Explicitly ask again for ChatGPT plan usage permission.
+    #[arg(long)]
+    pub consent: bool,
 }
 
 #[derive(Subcommand, Debug)]

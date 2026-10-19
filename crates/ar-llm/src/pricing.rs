@@ -27,6 +27,9 @@ impl PriceTable {
         output_tokens: u32,
         embedding_tokens: u32,
     ) -> Option<f64> {
+        if provider_base_url == "chatgpt-plan" {
+            return None;
+        }
         let price = self
             .models
             .get(&price_key(provider_base_url, model))
@@ -108,4 +111,14 @@ pub enum Error {
         path: String,
         source: serde_json::Error,
     },
+}
+
+#[cfg(test)]
+mod chatgpt_tests {
+    #[test]
+    fn subscription_usage_is_never_priced_as_api_spend() {
+        assert!(super::default_openai_price_table()
+            .estimate_usage_usd("chatgpt-plan", "gpt-4o", 1000, 1000, 0)
+            .is_none());
+    }
 }

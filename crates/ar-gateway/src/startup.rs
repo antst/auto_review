@@ -12,6 +12,7 @@ use ar_index::{
     InMemoryLearningsStore, InMemoryVectorStore, SqliteLearningsStore, SqliteVectorStore,
     VectorStore,
 };
+use ar_llm::chatgpt::CompletionAuth;
 use ar_llm::{ModelTier, OpenAiProvider, Router as LlmRouter};
 use ar_orchestrator::review_history::{InMemoryReviewHistory, ReviewHistory};
 use ar_orchestrator::sqlite_history::SqliteReviewHistory;
@@ -26,6 +27,41 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
+
+#[cfg(test)]
+mod chatgpt_oci_tests {
+    use super::*;
+    #[test]
+    fn oauth_directory_is_mounted_writable_so_rotation_survives_restart() {
+        let config = serde_json::json!({"process":{},"mounts":[]});
+        let values = vec![
+            ("LLM_AUTH_MODE".into(), "chatgpt".into()),
+            (
+                "LLM_CHATGPT_CREDENTIALS".into(),
+                "/home/operator/private/chatgpt/credentials.json".into(),
+            ),
+        ];
+        let config = staged_oci_config_with_process_env(config, &values).unwrap();
+        assert!(config["process"]["env"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(
+                "LLM_CHATGPT_CREDENTIALS=/var/lib/auto_review/chatgpt/credentials.json"
+            )));
+        assert_eq!(
+            config["mounts"][0]["source"],
+            "/home/operator/private/chatgpt"
+        );
+        assert_eq!(
+            config["mounts"][0]["destination"],
+            "/var/lib/auto_review/chatgpt"
+        );
+        assert!(config["mounts"][0]["options"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("rw")));
+    }
+}
 
 #[derive(Clone, Copy)]
 struct GatewayStartupEnvValues<'a> {
@@ -167,6 +203,9 @@ const INNER_GATEWAY_ENV_ALLOWLIST: &[&str] = &[
     "AR_FORGEJO_TOKEN",
     "LLM_BASE_URL",
     "LLM_API_KEY",
+    "LLM_AUTH_MODE",
+    "LLM_CHATGPT_CREDENTIALS",
+    "LLM_CHATGPT_PROFILE",
     "LLM_REASONING_MODEL",
     "LLM_CHEAP_MODEL",
     "LLM_CHEAP_BASE_URL",
@@ -529,6 +568,64 @@ fn staged_oci_config_with_process_env(
         ),
     );
 
+    let value = |name: &str| {
+        process_env
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, v)| v.as_str())
+    };
+    if value("LLM_AUTH_MODE") == Some("chatgpt") {
+        let credentials = value("LLM_CHATGPT_CREDENTIALS")
+            .map(Path::new)
+            .ok_or_else(|| {
+                OciSetupDiagnostic::new("LLM_CHATGPT_CREDENTIALS is required in chatgpt mode")
+            })?;
+        if !credentials.is_absolute()
+            || credentials
+                .components()
+                .any(|p| matches!(p, Component::ParentDir | Component::CurDir))
+        {
+            return Err(OciSetupDiagnostic::new(
+                "ChatGPT credentials must use an absolute path without traversal",
+            ));
+        }
+        let directory = credentials
+            .parent()
+            .filter(|p| *p != Path::new("/"))
+            .ok_or_else(|| {
+                OciSetupDiagnostic::new("ChatGPT credentials need a dedicated private directory")
+            })?;
+        let filename = credentials
+            .file_name()
+            .and_then(|p| p.to_str())
+            .ok_or_else(|| OciSetupDiagnostic::new("invalid ChatGPT credential filename"))?;
+        let destination = "/var/lib/auto_review/chatgpt";
+        let env = config["process"]["env"]
+            .as_array_mut()
+            .ok_or_else(|| OciSetupDiagnostic::new("invalid OCI process environment"))?;
+        for entry in env {
+            if entry
+                .as_str()
+                .is_some_and(|s| s.starts_with("LLM_CHATGPT_CREDENTIALS="))
+            {
+                *entry =
+                    serde_json::json!(format!("LLM_CHATGPT_CREDENTIALS={destination}/{filename}"));
+            }
+        }
+        let mounts = config
+            .as_object_mut()
+            .ok_or_else(|| OciSetupDiagnostic::new("invalid OCI config"))?
+            .entry("mounts")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or_else(|| OciSetupDiagnostic::new("invalid OCI mount configuration"))?;
+        // Mount the directory, not the JSON inode: atomic token replacement
+        // and the stable sidecar lock must be shared with the host and restarts.
+        mounts.push(
+            serde_json::json!({"type":"bind","source":directory,"destination":destination,
+            "options":["bind","rw","nosuid","nodev","noexec"]}),
+        );
+    }
     Ok(config)
 }
 
@@ -1121,7 +1218,7 @@ pub async fn run_from_env(options: StartupOptions) -> Result<()> {
     let forgejo_base = startup_config.forgejo_base_url;
     let forgejo_token = startup_config.ar_forgejo_token;
     let llm_base = startup_config.llm_base_url;
-    let llm_api_key = env::var("LLM_API_KEY").ok();
+    let llm_api_key = read_non_empty_env("LLM_API_KEY");
     let reasoning_model = startup_config.llm_reasoning_model;
 
     // Bot identity: read once and validate up-front so the poller
@@ -1143,10 +1240,14 @@ pub async fn run_from_env(options: StartupOptions) -> Result<()> {
     let forgejo =
         Arc::new(ForgejoClient::new(&forgejo_base, &forgejo_token).context("forgejo client")?);
 
-    let reasoning_provider = Arc::new(
-        OpenAiProvider::new(&llm_base, llm_api_key.as_deref(), &reasoning_model)
-            .context("reasoning LLM provider")?,
-    );
+    let auth_mode = read_non_empty_env("LLM_AUTH_MODE").unwrap_or_else(|| "api_key".into());
+    let credentials = read_non_empty_env("LLM_CHATGPT_CREDENTIALS").map(PathBuf::from);
+    let profile = read_non_empty_env("LLM_CHATGPT_PROFILE").unwrap_or_else(|| "default".into());
+    let completion_auth =
+        CompletionAuth::from_settings(&auth_mode, credentials.as_deref(), &profile)?;
+    let reasoning_provider = completion_auth
+        .provider(&llm_base, llm_api_key.as_deref(), &reasoning_model)
+        .context("reasoning LLM provider")?;
     let mut router = LlmRouter::new().with(ModelTier::Reasoning, reasoning_provider);
 
     // Optional Embedding tier — when configured, the orchestrator
@@ -1155,8 +1256,12 @@ pub async fn run_from_env(options: StartupOptions) -> Result<()> {
     // default; override with LLM_EMBEDDING_BASE_URL / _API_KEY when
     // your embedder lives on a different endpoint.
     if let Some(embedding_model) = read_non_empty_env("LLM_EMBEDDING_MODEL") {
-        let embed_base =
-            read_non_empty_env("LLM_EMBEDDING_BASE_URL").unwrap_or_else(|| llm_base.clone());
+        let embed_base = if completion_auth.uses_chatgpt() {
+            read_non_empty_env("LLM_EMBEDDING_BASE_URL")
+                .context("ChatGPT plan usage does not support embeddings; set a separate LLM_EMBEDDING_BASE_URL or disable LLM_EMBEDDING_MODEL")?
+        } else {
+            read_non_empty_env("LLM_EMBEDDING_BASE_URL").unwrap_or_else(|| llm_base.clone())
+        };
         let embed_key = read_non_empty_env("LLM_EMBEDDING_API_KEY").or_else(|| llm_api_key.clone());
         let mut provider = OpenAiProvider::new(&embed_base, embed_key.as_deref(), &embedding_model)
             .context("embedding LLM provider")?;
@@ -1180,10 +1285,9 @@ pub async fn run_from_env(options: StartupOptions) -> Result<()> {
         let cheap_base =
             read_non_empty_env("LLM_CHEAP_BASE_URL").unwrap_or_else(|| llm_base.clone());
         let cheap_key = read_non_empty_env("LLM_CHEAP_API_KEY").or_else(|| llm_api_key.clone());
-        let provider = Arc::new(
-            OpenAiProvider::new(&cheap_base, cheap_key.as_deref(), &cheap_model)
-                .context("cheap LLM provider")?,
-        );
+        let provider = completion_auth
+            .provider(&cheap_base, cheap_key.as_deref(), &cheap_model)
+            .context("cheap LLM provider")?;
         router = router.with(ModelTier::Cheap, provider);
         tracing::info!(model = %cheap_model, "cheap tier configured; LLM triage enabled");
     } else {

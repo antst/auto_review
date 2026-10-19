@@ -11,7 +11,7 @@ maintenance.
 |---|---|
 | `gateway` | Starts the long-running gateway service. |
 | `agentcore` | Starts the AWS Bedrock AgentCore-compatible runtime service. |
-| `auth` | Bot user authentication and token bootstrap. |
+| `auth` | Bot token bootstrap and ChatGPT subscription authentication. |
 | `webhook` | Forgejo webhook registration, auditing, deletion, and smoke tests. |
 | `config` | Repository `.auto_review.yaml` validation. |
 | `review` | One-off review execution. |
@@ -28,6 +28,21 @@ maintenance.
 | `webhook register` | Registers `pull_request` and `issue_comment` webhooks for one repo. |
 | `webhook list` | Lists webhooks installed on one repo. |
 | `webhook unregister` | Deletes a webhook by id or URL substring. |
+
+## ChatGPT authentication
+
+| Command | Purpose |
+|---|---|
+| `auth chatgpt login` | Continue with ChatGPT via a loopback OAuth callback; `--consent` asks for plan usage permission again. |
+| `auth chatgpt status` | Print account, expiry, local usage totals, and any request pause without printing tokens. |
+| `auth chatgpt models` | Fetch the selected account's model catalog. |
+| `auth chatgpt resume` | Clear a local quota pause after resolving the applicable limit. |
+| `auth chatgpt logout` | Revoke the renewable session and clear local tokens. |
+
+All accept `--credentials FILE` (`LLM_CHATGPT_CREDENTIALS`) and `--profile NAME`
+(`LLM_CHATGPT_PROFILE`, default `default`). Login also accepts `--port` (default
+1455). See [ChatGPT authentication](./CHATGPT.md) for remote sign-in, service
+configuration, directory permissions, and usage-limit behavior.
 
 ## Deployment validation
 

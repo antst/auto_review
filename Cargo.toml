@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 async-trait = "0.1"
 aws-config = { version = "1.8.18", features = ["behavior-version-latest"] }
-aws-sdk-dynamodb = "1.116.0"
+aws-sdk-dynamodb = { version = "1.116.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 url = "2.5"
 axum = "0.7"
 tower = "0.5"

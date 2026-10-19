@@ -6,6 +6,7 @@
 //! tier; review and verification run on the reasoning tier; embeddings have
 //! their own tier.
 
+pub mod chatgpt;
 pub mod openai;
 pub mod pricing;
 pub mod router;

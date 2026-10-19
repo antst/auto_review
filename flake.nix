@@ -173,6 +173,9 @@
             || baseName == "Justfile"
             || pkgs.lib.hasInfix "/.cargo/" strPath
             || (pkgs.lib.hasInfix "/ar-prompts/schemas/" strPath && pkgs.lib.hasSuffix ".json" path)
+            # Public test-only OIDC signing key and JWKS used by ar-llm tests.
+            || (pkgs.lib.hasInfix "/ar-llm/tests/fixtures/" strPath &&
+                (pkgs.lib.hasSuffix ".pem" path || pkgs.lib.hasSuffix ".json" path))
             || (pkgs.lib.hasInfix "/docs/" strPath && pkgs.lib.hasSuffix ".md" strPath)
             || (pkgs.lib.hasInfix "/bench/fixtures/" strPath && pkgs.lib.hasSuffix ".json" path)
             # Deploy assets the gateway's contract tests cross-check

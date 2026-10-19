@@ -74,6 +74,12 @@ pub struct CompleteResponse {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("ChatGPT authorization declined; run auth chatgpt login to try again")]
+    AuthorizationDeclined,
+    #[error("ChatGPT authentication: {0}")]
+    Authentication(String),
+    #[error("ChatGPT plan usage paused (retry at {retry_at:?}); manage usage at https://chatgpt.com/settings/usage; run auth chatgpt resume after resolving the limit")]
+    SubscriptionLimit { retry_at: Option<u64> },
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("invalid base URL: {0}")]

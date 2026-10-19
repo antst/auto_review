@@ -445,3 +445,23 @@ adversary capability it grants. If a new mitigation is added, link
 its commit. If a Threat (T#) becomes obsolete because of an
 architectural change, mark it Obsolete rather than deleting the
 section, so the audit trail remains.
+
+## ChatGPT OAuth credentials
+
+The optional subscription provider stores OAuth credentials outside reviewed
+workspaces in an operator-owned directory (0700); atomic credential writes use
+0600. The loopback-only sign-in callback binds each code to fresh state and
+PKCE, validates the ID-token signature/issuer/audience/expiry/nonce, and rejects
+client/account replacement during reauthorization. Tokens and ID-token hints
+are not included in printed URLs, status output, or provider errors. OAuth
+endpoints are fixed to OpenAI and redirects are disabled on authenticated
+requests. Refresh uses a stable sidecar lock across processes before reading
+and rotating the token set. Terminal refresh errors clear unusable credentials;
+network outages retain them. Quota pauses persist across restarts and cannot
+cause an implicit switch to API billing. The packaged OCI launcher exposes only
+the explicitly selected credential directory through a writable, non-executable
+bind mount so token replacement persists without mounting a home directory.
+
+These boundaries are covered by `ar-llm`'s `chatgpt::auth`, `chatgpt::login`,
+`chatgpt::provider`, and billing-mode tests, plus the gateway's
+`startup::chatgpt_oci_tests` mount contract.

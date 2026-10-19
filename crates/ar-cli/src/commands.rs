@@ -16,7 +16,8 @@ use ar_forgejo::{
     Client, CreateAccessTokenRequest, CreateWebhookRequest, InitClient, WebhookConfig,
 };
 use ar_github::{InstallationTokenRequest, Permission};
-use ar_llm::{ModelTier, OpenAiProvider, Router as LlmRouter};
+use ar_llm::chatgpt::CompletionAuth;
+use ar_llm::{ModelTier, Router as LlmRouter};
 use ar_orchestrator::{
     run_review_job, InMemoryReviewHistory, InlineDispatcher, JobDispatcher, ReviewHistory,
     ReviewJob,
@@ -173,10 +174,9 @@ fn build_reasoning_llm(
     llm_api_key: Option<&str>,
     llm_model: &str,
 ) -> Result<Arc<LlmRouter>> {
-    let provider = Arc::new(
-        OpenAiProvider::new(llm_base_url, llm_api_key, llm_model)
-            .context("build reasoning LLM provider")?,
-    );
+    let provider = CompletionAuth::from_env()?
+        .provider(llm_base_url, llm_api_key, llm_model)
+        .context("build reasoning LLM provider")?;
     Ok(Arc::new(
         LlmRouter::new().with(ModelTier::Reasoning, provider),
     ))
@@ -515,14 +515,13 @@ pub async fn review_once(args: ReviewOnceArgs) -> Result<()> {
         return print_dry_run_prompt(&forgejo, &args, &pr.title, &pr.body).await;
     }
 
-    let provider = Arc::new(
-        OpenAiProvider::new(
+    let provider = CompletionAuth::from_env()?
+        .provider(
             &args.llm_base_url,
             args.llm_api_key.as_deref(),
             &args.llm_model,
         )
-        .context("build LLM provider")?,
-    );
+        .context("build LLM provider")?;
     let llm = Arc::new(LlmRouter::new().with(ModelTier::Reasoning, provider));
 
     let job = ReviewJob {
@@ -1205,6 +1204,42 @@ fn parse_metric_counters(text: &str) -> std::collections::HashMap<String, u64> {
 /// Probe outbound dependencies and sanity-check the webhook
 /// secret. Mirrors deploy-time concerns: bot PAT valid, LLM
 /// reachable, webhook secret long enough.
+fn chatgpt_catalog(value: serde_json::Value) -> Result<LlmProbeResult> {
+    let models = value
+        .get("models")
+        .and_then(|v| v.as_array())
+        .context("invalid ChatGPT model catalog")?;
+    let model_ids = models
+        .iter()
+        .filter(|m| m["visibility"] == "list")
+        .filter_map(|m| m["slug"].as_str().map(str::to_owned))
+        .collect();
+    Ok(LlmProbeResult {
+        detail:
+            "ChatGPT account catalog fetched; inference access is verified by a completed request"
+                .into(),
+        model_ids,
+    })
+}
+
+async fn probe_completion_llm(
+    base: &str,
+    api_key: Option<&str>,
+    timeout: std::time::Duration,
+) -> Result<LlmProbeResult> {
+    let selection = CompletionAuth::from_env()?;
+    if selection.uses_chatgpt() {
+        let _ = selection.provider(base, api_key, "catalog")?;
+    }
+    match selection {
+        CompletionAuth::ApiKey => probe_llm(base, api_key, timeout).await,
+        CompletionAuth::ChatGpt(auth) => {
+            let catalog = auth.models().await?;
+            chatgpt_catalog(catalog)
+        }
+    }
+}
+
 pub async fn doctor(args: DoctorArgs) -> Result<()> {
     let timeout = std::time::Duration::from_secs(args.timeout_secs);
     let mut report = DoctorReport::new();
@@ -1238,7 +1273,7 @@ pub async fn doctor(args: DoctorArgs) -> Result<()> {
         ("llm-embedding-model", args.llm_embedding_model.as_deref()),
     ];
     match args.llm_base_url.as_deref() {
-        Some(url) => match probe_llm(url, args.llm_api_key.as_deref(), timeout).await {
+        Some(url) => match probe_completion_llm(url, args.llm_api_key.as_deref(), timeout).await {
             Ok(LlmProbeResult { detail, model_ids }) => {
                 report.pass("llm", detail);
                 for &(name, configured) in &configured_models {
@@ -2078,6 +2113,17 @@ mod tests {
     fn webhook_secret_check_warns_on_low_uniqueness() {
         let err = check_webhook_secret("aaaaaaaaaaaaaaaaaaaa").expect_err("low entropy");
         assert!(err.contains("distinct"));
+    }
+
+    #[test]
+    fn chatgpt_catalog_uses_account_model_slugs() {
+        let result = chatgpt_catalog(serde_json::json!({"models":[
+            {"slug":"account-model", "display_name":"Model", "visibility":"list"},
+            {"slug":"hidden", "visibility":"hide"}
+        ]}))
+        .unwrap();
+        assert_eq!(result.model_ids, vec!["account-model"]);
+        assert!(chatgpt_catalog(serde_json::json!({"unexpected":true})).is_err());
     }
 
     #[tokio::test]

@@ -708,3 +708,14 @@ Before filing, capture:
 
 Attach those to the issue. Do **not** include `AR_FORGEJO_TOKEN`,
 `LLM_API_KEY`, or `WEBHOOK_SECRET` in any field.
+
+## ChatGPT subscription recovery
+
+See [ChatGPT authentication](./CHATGPT.md) for sign-in and deployment setup.
+Use `auto-review auth chatgpt status` to inspect the configured profile without
+printing credentials. Subscription-limit failures pause that profile across
+restarts. Resolve the limit in ChatGPT usage settings, then use
+`auto-review auth chatgpt resume` and trigger a fresh review. A reset time is
+shown only when the server supplies a retry delay. A terminal refresh error
+requires `auto-review auth chatgpt login`; transient failures retain credentials.
+Use `auth chatgpt logout` to revoke the renewable session before retiring a host.

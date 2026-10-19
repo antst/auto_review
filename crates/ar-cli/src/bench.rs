@@ -11,13 +11,13 @@
 
 use crate::cli::BenchArgs;
 use anyhow::{Context, Result};
-use ar_llm::{ModelTier, OpenAiProvider, Router as LlmRouter};
+use ar_llm::chatgpt::CompletionAuth;
+use ar_llm::{ModelTier, Router as LlmRouter};
 use ar_prompts::ReviewOutput;
 use ar_prompts::{render_review_prompt, system_prompt, ReviewPromptInputs};
 use ar_review::{generate_with_self_heal, verify_findings, HealConfig};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Deserialize, Default)]
@@ -220,10 +220,7 @@ impl Comparison {
         // The "50% jump in p99" check needs the baseline's p99 to
         // compute the percent; signal it via the absolute jump
         // instead. A 5-second p99 increase is alert-worthy regardless.
-        if self.p99_latency_ms_delta > 5000 {
-            return true;
-        }
-        false
+        self.p99_latency_ms_delta > 5000
     }
 }
 
@@ -349,20 +346,19 @@ fn collect_json_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 fn build_router(args: &BenchArgs) -> Result<LlmRouter> {
-    let reasoning = Arc::new(
-        OpenAiProvider::new(
+    let auth = CompletionAuth::from_env()?;
+    let reasoning = auth
+        .provider(
             &args.llm_base_url,
             args.llm_api_key.as_deref(),
             &args.llm_model,
         )
-        .context("build reasoning provider")?,
-    );
+        .context("build reasoning provider")?;
     let mut router = LlmRouter::new().with(ModelTier::Reasoning, reasoning);
     if let Some(cheap_model) = &args.llm_cheap_model {
-        let cheap = Arc::new(
-            OpenAiProvider::new(&args.llm_base_url, args.llm_api_key.as_deref(), cheap_model)
-                .context("build cheap provider")?,
-        );
+        let cheap = auth
+            .provider(&args.llm_base_url, args.llm_api_key.as_deref(), cheap_model)
+            .context("build cheap provider")?;
         router = router.with(ModelTier::Cheap, cheap);
     }
     Ok(router)

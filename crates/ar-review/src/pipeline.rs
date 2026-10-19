@@ -247,17 +247,23 @@ fn append_llm_usage_cost_footer(
             .iter()
             .filter(|(entry_tier, _, _, _, _)| *entry_tier == tier)
         {
+            let label = match entry_tier {
+                ModelTier::Cheap => "Cheap",
+                ModelTier::Reasoning => "Reasoning",
+                ModelTier::Embedding => "Embedding",
+            };
+            if base_url == "chatgpt-plan" {
+                lines.push(format!(
+                    "- {label} ({model}) in={in_tokens} out={out_tokens} using ChatGPT plan"
+                ));
+                continue;
+            }
             let Some(cost) =
                 pricing.estimate_usage_usd(base_url, model, *in_tokens, *out_tokens, 0)
             else {
                 continue;
             };
 
-            let label = match entry_tier {
-                ModelTier::Cheap => "Cheap",
-                ModelTier::Reasoning => "Reasoning",
-                ModelTier::Embedding => "Embedding",
-            };
             lines.push(format!(
                 "- {label} ({model}) in={in_tokens} out={out_tokens} cost=${cost:.6}"
             ));
@@ -276,6 +282,13 @@ fn append_llm_usage_cost_footer(
     body.push_str("## LLM usage and cost\n\n");
     body.push_str(&lines.join("\n"));
     body.push('\n');
+
+    if aggregated
+        .iter()
+        .any(|(_, base, _, _, _)| base == "chatgpt-plan")
+    {
+        body.push_str("\nManage ChatGPT plan usage: https://chatgpt.com/settings/usage\n");
+    }
 
     let mut via = String::new();
     match footer_base_urls.as_slice() {
@@ -1047,6 +1060,26 @@ mod tests {
         let posted = host.posted_reviews.lock().unwrap();
         assert_eq!(posted.len(), 1);
         assert_eq!(posted[0].commit_id, "abc123");
+    }
+
+    #[test]
+    fn subscription_footer_reports_tokens_without_api_charges() {
+        let mut body = String::new();
+        let cost = append_llm_usage_cost_footer(
+            &mut body,
+            &[(
+                ModelTier::Reasoning,
+                "chatgpt-plan".into(),
+                "gpt-4o".into(),
+                100,
+                20,
+            )],
+        );
+        assert_eq!(cost, 0.0);
+        assert!(body.contains("ChatGPT plan"));
+        assert!(body.contains("in=100 out=20"));
+        assert!(body.contains("https://chatgpt.com/settings/usage"));
+        assert!(!body.contains("cost=$"));
     }
 
     #[test]

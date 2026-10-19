@@ -76,6 +76,8 @@ LLM_REASONING_MODEL=qwen2.5-coder:32b
 `AR_CI_REVIEW_TOKEN` enables `POST /reviews/ci`; store the same value as the Forgejo
 Actions secret `AR_CI_REVIEW_TOKEN`.
 
+For ChatGPT subscription-backed completion tiers, follow [ChatGPT authentication](./CHATGPT.md) instead of supplying an API key.
+
 ## 4. Run the gateway
 
 On supported Linux hosts, the packaged `auto-review` binary starts the gateway
