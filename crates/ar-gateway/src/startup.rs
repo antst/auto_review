@@ -206,6 +206,7 @@ const INNER_GATEWAY_ENV_ALLOWLIST: &[&str] = &[
     "LLM_AUTH_MODE",
     "LLM_CHATGPT_CREDENTIALS",
     "LLM_CHATGPT_PROFILE",
+    "LLM_REASONING_EFFORT",
     "LLM_REASONING_MODEL",
     "LLM_CHEAP_MODEL",
     "LLM_CHEAP_BASE_URL",
@@ -1243,8 +1244,13 @@ pub async fn run_from_env(options: StartupOptions) -> Result<()> {
     let auth_mode = read_non_empty_env("LLM_AUTH_MODE").unwrap_or_else(|| "api_key".into());
     let credentials = read_non_empty_env("LLM_CHATGPT_CREDENTIALS").map(PathBuf::from);
     let profile = read_non_empty_env("LLM_CHATGPT_PROFILE").unwrap_or_else(|| "default".into());
-    let completion_auth =
-        CompletionAuth::from_settings(&auth_mode, credentials.as_deref(), &profile)?;
+    let reasoning_effort = read_non_empty_env("LLM_REASONING_EFFORT");
+    let completion_auth = CompletionAuth::from_settings(
+        &auth_mode,
+        credentials.as_deref(),
+        &profile,
+        reasoning_effort.as_deref(),
+    )?;
     let reasoning_provider = completion_auth
         .provider(&llm_base, llm_api_key.as_deref(), &reasoning_model)
         .context("reasoning LLM provider")?;

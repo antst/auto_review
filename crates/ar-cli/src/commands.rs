@@ -1233,7 +1233,7 @@ async fn probe_completion_llm(
     }
     match selection {
         CompletionAuth::ApiKey => probe_llm(base, api_key, timeout).await,
-        CompletionAuth::ChatGpt(auth) => {
+        CompletionAuth::ChatGpt(auth, _) => {
             let catalog = auth.models().await?;
             chatgpt_catalog(catalog)
         }

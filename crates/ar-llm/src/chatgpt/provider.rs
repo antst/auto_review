@@ -7,6 +7,7 @@ pub struct ChatGptProvider {
     auth: Arc<ChatGptAuth>,
     model: String,
     endpoint: String,
+    reasoning_effort: Option<String>,
 }
 
 impl ChatGptProvider {
@@ -15,7 +16,19 @@ impl ChatGptProvider {
             auth,
             model,
             endpoint: "https://api.openai.com/v1/responses".into(),
+            reasoning_effort: None,
         }
+    }
+    pub fn with_reasoning_effort(mut self, effort: Option<&str>) -> Result<Self, Error> {
+        if let Some(value) = effort {
+            if !matches!(value, "low" | "medium" | "high" | "xhigh" | "max") {
+                return Err(Error::Authentication(
+                    "LLM_REASONING_EFFORT must be low, medium, high, xhigh, or max".into(),
+                ));
+            }
+            self.reasoning_effort = Some(value.into());
+        }
+        Ok(self)
     }
 }
 
@@ -36,6 +49,9 @@ impl LlmProvider for ChatGptProvider {
         });
         if let Some(instructions) = req.system {
             body["instructions"] = json!(instructions);
+        }
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning"] = json!({"effort": effort});
         }
         if let Some(ResponseFormat::JsonSchema { name, schema }) = req.response_format {
             body["text"] = json!({"format":{"type":"json_schema", "name":name, "schema":schema, "strict":true}});
@@ -324,7 +340,9 @@ mod tests {
         let (_dir, auth) =
             super::super::auth::tests::fixture(&server, super::super::auth::now() + 3600).await;
         let auth = Arc::new(auth);
-        let mut provider = ChatGptProvider::new(auth.clone(), "account-model".into());
+        let mut provider = ChatGptProvider::new(auth.clone(), "account-model".into())
+            .with_reasoning_effort(Some("high"))
+            .unwrap();
         provider.endpoint = format!("{}/v1/responses", server.uri());
         let completed = json!({"type":"response.completed", "response": {
             "status":"completed", "output":[{"type":"message", "content":[{"type":"output_text","text":"{}"}]}],
@@ -361,6 +379,7 @@ mod tests {
         assert_eq!(body["store"], false);
         assert_eq!(body["stream"], true);
         assert_eq!(body["model"], "account-model");
+        assert_eq!(body["reasoning"]["effort"], "high");
         assert_eq!(body["instructions"], "review carefully");
         assert_eq!(body["input"], json!([{"role":"user","content":"diff"}]));
         assert_eq!(body["text"]["format"]["type"], "json_schema");

@@ -45,6 +45,8 @@ LLM_CHATGPT_CREDENTIALS=/absolute/private/chatgpt/credentials.json
 LLM_CHATGPT_PROFILE=default
 # Choose an available slug from `auto-review auth chatgpt models`:
 LLM_REASONING_MODEL=<account-model-slug>
+# Optional effort for completion requests; gpt-6.1-sol supports high:
+LLM_REASONING_EFFORT=high
 # Optional verifier/chat tier, using the same subscription profile:
 LLM_CHEAP_MODEL=<account-model-slug>
 ```
@@ -60,6 +62,9 @@ unset, or configure a separate `LLM_EMBEDDING_BASE_URL` and, if required,
 `LLM_EMBEDDING_API_KEY`. This is a separately configured provider/billing path.
 The plan route rejects sampling and output-token-limit parameters, so this
 provider omits `temperature`, `max_tokens`, and `max_output_tokens`.
+`LLM_REASONING_EFFORT` sets `reasoning.effort` explicitly in ChatGPT mode.
+Accepted values are `low`, `medium`, `high`, `xhigh`, and `max`; choose a value
+supported by the selected model. When unset, the model's default applies.
 
 ## Refresh, usage, and recovery
 
