@@ -49,6 +49,9 @@ LLM_REASONING_MODEL=<account-model-slug>
 LLM_REASONING_EFFORT=high
 # Optional verifier/chat tier, using the same subscription profile:
 LLM_CHEAP_MODEL=<account-model-slug>
+# Optional read-only repository inspection when verifying each finding.
+# Requires LLM_CHEAP_MODEL; the tier may use the same model as Reasoning.
+AR_AGENTIC_VERIFIER=1
 ```
 
 Unset `LLM_API_KEY` and `LLM_CHEAP_API_KEY` in this mode. Selecting API billing

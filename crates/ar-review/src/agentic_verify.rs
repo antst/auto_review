@@ -51,11 +51,11 @@ the workspace — drop spurious findings, keep real ones.
 You can issue these tool calls (one per turn):
 
 - {"tool":"read_file","path":"<repo-relative path>","start_line":<int?>,"end_line":<int?>}
-  Read part or all of a file. Lines are 1-indexed inclusive. Both line
-  fields are optional; omit them to read the whole file (capped).
+  Read part or all of a file. Lines are 1-indexed inclusive. Use null
+  for both line fields to read the whole file (capped).
 
 - {"tool":"search","pattern":"<regex>","path":"<repo-relative path?>"}
-  Regex-search either a single file or the whole workspace (omit path).
+  Regex-search either a single file or the whole workspace (null path).
   Returns lines that match.
 
 - {"tool":"verdict","keep":<bool>,"reason":"<short rationale>"}
@@ -63,7 +63,8 @@ You can issue these tool calls (one per turn):
 
 Return EXACTLY ONE JSON object per turn. No markdown. No prose. The
 schema is validated; malformed output is treated as a failed turn and
-the finding is kept by default.
+the finding is kept by default. Include every schema field, using null
+for fields that are not used by the selected tool.
 
 Default to keep=true unless your investigation actively contradicts
 the finding. False positives at the verifier hurt review quality less
@@ -93,14 +94,14 @@ fn agent_action_schema() -> serde_json::Value {
         "type": "object",
         "properties": {
             "tool": {"type": "string", "enum": ["read_file", "search", "verdict"]},
-            "path": {"type": "string"},
-            "pattern": {"type": "string"},
-            "start_line": {"type": "integer", "minimum": 1},
-            "end_line": {"type": "integer", "minimum": 1},
-            "keep": {"type": "boolean"},
-            "reason": {"type": "string"}
+            "path": {"type": ["string", "null"]},
+            "pattern": {"type": ["string", "null"]},
+            "start_line": {"type": ["integer", "null"], "minimum": 1},
+            "end_line": {"type": ["integer", "null"], "minimum": 1},
+            "keep": {"type": ["boolean", "null"]},
+            "reason": {"type": ["string", "null"]}
         },
-        "required": ["tool"],
+        "required": ["tool", "path", "pattern", "start_line", "end_line", "keep", "reason"],
         "additionalProperties": false
     })
 }
@@ -329,6 +330,34 @@ fn format_search_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn action_schema_meets_responses_strict_required_contract() {
+        let schema = agent_action_schema();
+        let properties = schema["properties"].as_object().unwrap();
+        let required = schema["required"].as_array().unwrap();
+        // The live Responses endpoint rejects a strict schema unless every
+        // property is required; optional actions must use nullable values.
+        for key in properties.keys() {
+            assert!(
+                required.iter().any(|value| value == key),
+                "missing required property: {key}"
+            );
+        }
+        for key in [
+            "path",
+            "pattern",
+            "start_line",
+            "end_line",
+            "keep",
+            "reason",
+        ] {
+            assert!(properties[key]["type"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("null")));
+        }
+    }
     use ar_llm::{CompleteResponse, Error as LlmError, LlmProvider};
     use ar_prompts::ReviewSeverity;
     use async_trait::async_trait;
