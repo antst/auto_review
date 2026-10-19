@@ -366,6 +366,12 @@ quota) or 5xx (provider outage). `LLM_API_KEY` rotation: see §6.2.
 
 ## 4. Bot identity
 
+Forgejo rejects approval and rejection votes on a bot-authored PR. In that
+specific case, the Forgejo adapter posts the same summary and inline findings
+as a comment review. It does not cast a self-approval or satisfy an approval
+requirement; a maintainer still reviews the PR. Other review-posting errors
+remain errors and do not change the requested vote.
+
 ### 4.1 `AR_BOT_LOGIN` and `AR_BOT_NAME`
 
 Two separate things:

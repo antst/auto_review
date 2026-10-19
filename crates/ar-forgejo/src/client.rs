@@ -1,6 +1,6 @@
 use crate::types::{
     ChangedFile, CommitStatus, CreateReviewRequest, CreateWebhookRequest, CreatedWebhook,
-    PullRequestSummary,
+    PullRequestSummary, ReviewEvent,
 };
 pub use ar_forge::CreatedReview;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
@@ -162,7 +162,30 @@ impl Client {
         req: &CreateReviewRequest,
     ) -> Result<CreatedReview, Error> {
         let url = self.url(&format!("repos/{owner}/{repo}/pulls/{n}/reviews"))?;
-        json_post(&self.http, url, req).await
+        let result = json_post(&self.http, url.clone(), req).await;
+        if let Err(Error::Api { status: 422, body }) = &result {
+            let error = serde_json::from_str::<serde_json::Value>(body).ok();
+            if matches!(
+                req.event,
+                ReviewEvent::Approved | ReviewEvent::RequestChanges
+            ) && error.as_ref().is_some_and(|value| {
+                matches!(
+                    value.get("message").and_then(serde_json::Value::as_str),
+                    Some(
+                        "approve your own pull is not allowed"
+                            | "reject your own pull is not allowed"
+                    )
+                )
+            }) {
+                tracing::warn!(
+                    "Forgejo rejected a vote on the bot's own PR; posting findings as a comment"
+                );
+                let mut comment = req.clone();
+                comment.event = ReviewEvent::Comment;
+                return json_post(&self.http, url, &comment).await;
+            }
+        }
+        result
     }
 
     /// Post a commit status (the aggregate pass/fail badge on the PR).
@@ -548,6 +571,72 @@ mod tests {
         let server = MockServer::start().await;
         let client = Client::new(&server.uri(), "test-token").expect("client");
         (server, client)
+    }
+
+    #[tokio::test]
+    async fn own_pr_vote_rejection_posts_the_same_findings_as_a_comment() {
+        let (server, client) = mock_client().await;
+        let req = CreateReviewRequest {
+            body: "review summary".into(),
+            commit_id: "head-sha".into(),
+            event: ReviewEvent::RequestChanges,
+            comments: vec![ReviewComment {
+                path: "src/main.rs".into(),
+                body: "finding".into(),
+                old_position: None,
+                new_position: Some(3),
+            }],
+        };
+        Mock::given(method("POST"))
+            .and(path("/api/v1/repos/o/r/pulls/7/reviews"))
+            .and(body_json(&req))
+            .respond_with(ResponseTemplate::new(422).set_body_json(
+                serde_json::json!({"message":"reject your own pull is not allowed"}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut comment = req.clone();
+        comment.event = ReviewEvent::Comment;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/repos/o/r/pulls/7/reviews"))
+            .and(body_json(&comment))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id":42,"state":"COMMENT"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let review = client.create_review("o", "r", 7, &req).await.unwrap();
+        assert_eq!(review.id, 42);
+        assert_eq!(review.state, "COMMENT");
+    }
+
+    #[tokio::test]
+    async fn unrelated_vote_errors_are_not_retried_as_comments() {
+        for (status, message) in [
+            (403, "reject your own pull is not allowed"),
+            (422, "invalid line position"),
+        ] {
+            let (server, client) = mock_client().await;
+            Mock::given(method("POST"))
+                .respond_with(
+                    ResponseTemplate::new(status)
+                        .set_body_json(serde_json::json!({"message":message})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let req = CreateReviewRequest {
+                body: "summary".into(),
+                commit_id: "head".into(),
+                event: ReviewEvent::RequestChanges,
+                comments: vec![],
+            };
+            assert!(client.create_review("o", "r", 7, &req).await.is_err());
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        }
     }
 
     #[test]
