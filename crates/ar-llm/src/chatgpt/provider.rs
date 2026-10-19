@@ -136,6 +136,7 @@ impl ChatGptProvider {
     ) -> Result<CompleteResponse, Error> {
         let mut buffer = Vec::new();
         let mut data = Vec::new();
+        let mut streamed_text = String::new();
         while let Some(chunk) = response.chunk().await? {
             buffer.extend_from_slice(&chunk);
             if buffer.len() > 4 * 1024 * 1024 {
@@ -152,6 +153,17 @@ impl ChatGptProvider {
                         .map_err(|_| Error::Decode("invalid Responses event".into()))?;
                     data.clear();
                     match event.get("type").and_then(Value::as_str) {
+                        Some("response.output_text.delta") => {
+                            if let Some(delta) = event.get("delta").and_then(Value::as_str) {
+                                if streamed_text.len().saturating_add(delta.len()) > 4 * 1024 * 1024
+                                {
+                                    return Err(Error::Decode(
+                                        "Responses text exceeds 4 MiB".into(),
+                                    ));
+                                }
+                                streamed_text.push_str(delta);
+                            }
+                        }
                         Some("response.completed") => {
                             let r = &event["response"];
                             if r["status"] != "completed" {
@@ -159,7 +171,7 @@ impl ChatGptProvider {
                                     "Responses request did not complete".into(),
                                 ));
                             }
-                            let content = r["output"]
+                            let mut content = r["output"]
                                 .as_array()
                                 .into_iter()
                                 .flatten()
@@ -168,6 +180,12 @@ impl ChatGptProvider {
                                 .filter(|part| part["type"] == "output_text")
                                 .filter_map(|part| part["text"].as_str())
                                 .collect::<String>();
+                            // The subscription stream can omit output items from
+                            // its terminal event. Retain deltas, but only expose
+                            // them after confirmed successful completion.
+                            if content.is_empty() {
+                                content = streamed_text;
+                            }
                             if content.is_empty() {
                                 return Err(Error::Decode(
                                     "Responses request completed without text".into(),
@@ -332,6 +350,30 @@ mod tests {
             Err(Error::SubscriptionLimit { .. })
         ));
         assert!(auth.status().await.unwrap().paused);
+    }
+
+    #[tokio::test]
+    async fn completion_retains_streamed_text_when_terminal_output_is_empty() {
+        let server = MockServer::start().await;
+        let (_dir, auth) =
+            super::super::auth::tests::fixture(&server, super::super::auth::now() + 3600).await;
+        let auth = Arc::new(auth);
+        let mut provider = ChatGptProvider::new(auth.clone(), "account-model".into());
+        provider.endpoint = format!("{}/v1/responses", server.uri());
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(concat!(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"{\"}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"}\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":16}}}\n\n"
+            )))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = provider.complete(CompleteRequest::default()).await.unwrap();
+        assert_eq!(result.content, "{}");
+        assert_eq!((result.input_tokens, result.output_tokens), (10, 16));
+        let status = auth.status().await.unwrap();
+        assert_eq!((status.input_tokens, status.output_tokens), (10, 16));
     }
 
     #[tokio::test]
